@@ -262,6 +262,27 @@ def filter_data_by_custom_dates(df, start_date, end_date):
     
     return df_filtered
 
+def apply_global_date_filter(df):
+    """
+    Applique le filtre de date global basé sur les paramètres dans session_state
+    """
+    if 'global_date_filter_type' not in st.session_state:
+        return df
+    
+    filter_type = st.session_state.global_date_filter_type
+    
+    if filter_type == "Toute la période":
+        return df
+    elif filter_type == "Année Fiscale" and 'global_fiscal_year' in st.session_state:
+        fiscal_year = st.session_state.global_fiscal_year
+        return filter_data_by_fiscal_year(df, fiscal_year)
+    elif filter_type == "Dates Personnalisées" and 'global_custom_start' in st.session_state and 'global_custom_end' in st.session_state:
+        start_date = st.session_state.global_custom_start
+        end_date = st.session_state.global_custom_end
+        return filter_data_by_custom_dates(df, start_date, end_date)
+    
+    return df
+
 def create_monthly_sales_chart(df, fiscal_year):
     """
     Crée un graphique de l'évolution du CA par mois pour l'année fiscale.
@@ -285,7 +306,7 @@ def create_monthly_sales_chart(df, fiscal_year):
         monthly_sales, 
         x='MonthName', 
         y='Customer Sales',
-        title=f"Évolution mensuelle du CA - Année fiscale {fiscal_year}",
+        title=f"Évolution mensuelle du CA - {fiscal_year}",
         labels={'Customer Sales': 'Chiffre d\'affaires (€)', 'MonthName': ''},
         color='Customer Sales',
         color_continuous_scale='Blues'
@@ -739,9 +760,66 @@ def setup_sidebar():
         st.rerun()
     
     st.sidebar.markdown("---")
-    st.sidebar.markdown("#### 🔍 Filtres")
+    
+    # FILTRE GLOBAL DE DATE
+    st.sidebar.markdown("#### 📅 Filtre de Date Global")
+    
+    # Radio button pour le type de filtre
+    filter_type = st.sidebar.radio(
+        "Type de filtre:",
+        ["Toute la période", "Année Fiscale", "Dates Personnalisées"],
+        key="global_date_filter_type"
+    )
     
     df = st.session_state['df_merged']
+    
+    if filter_type == "Année Fiscale":
+        # Obtenir toutes les années fiscales disponibles dans les données
+        all_fiscal_years = set()
+        for (groupe, interlocuteur), group_df in df.groupby(['Groupe', 'Interlocuteur']):
+            fiscal_years = get_fiscal_years_with_data(group_df)
+            all_fiscal_years.update(fiscal_years)
+        
+        if all_fiscal_years:
+            selected_fiscal = st.sidebar.selectbox(
+                "Sélectionner une année fiscale",
+                sorted(list(all_fiscal_years)),
+                key="global_fiscal_year"
+            )
+    
+    elif filter_type == "Dates Personnalisées":
+        # Obtenir les limites globales des données
+        min_date = df['Posting Date'].min()
+        max_date = df['Posting Date'].max()
+        
+        # Date picker pour début
+        custom_start = st.sidebar.date_input(
+            "Date de début",
+            value=min_date,
+            min_value=min_date,
+            max_value=max_date,
+            key="global_custom_start_input",
+            format="DD/MM/YYYY"
+        )
+        
+        # Date picker pour fin
+        custom_end = st.sidebar.date_input(
+            "Date de fin",
+            value=max_date,
+            min_value=min_date,
+            max_value=max_date,
+            key="global_custom_end_input",
+            format="DD/MM/YYYY"
+        )
+        
+        # Stocker dans session_state
+        st.session_state.global_custom_start = pd.to_datetime(custom_start)
+        st.session_state.global_custom_end = pd.to_datetime(custom_end)
+    
+    st.sidebar.markdown("---")
+    
+    # Navigation par critère
+    st.sidebar.markdown("#### 🔍 Filtres de Navigation")
     
     # Choix du mode de filtrage
     filter_mode = st.sidebar.radio(
@@ -799,91 +877,6 @@ def setup_sidebar():
                     if st.sidebar.button("🏢 Voir analyse groupe", use_container_width=True):
                         st.session_state.page = 'groupe'
                         st.rerun()
-                    
-                    # Filtre année fiscale
-                    st.sidebar.markdown("---")
-                    st.sidebar.markdown("### 📅 Filtre Temporel")
-                    
-                    df_groupe = df[(df['Groupe'] == selected_groupe) & (df['Interlocuteur'] == selected_interlocuteur)]
-                    if not df_groupe.empty:
-                        # Radio button pour choisir le type de filtre
-                        filter_type = st.sidebar.radio(
-                            "Type de filtre:",
-                            ["Année Fiscale", "Dates Personnalisées"],
-                            key="filter_type_mode1"
-                        )
-                        
-                        if filter_type == "Année Fiscale":
-                            # Réinitialiser les dates personnalisées si elles existent
-                            if 'use_custom_dates' in st.session_state:
-                                st.session_state.use_custom_dates = False
-                            
-                            fiscal_years = get_fiscal_years_with_data(df_groupe)
-                            
-                            if fiscal_years:
-                                selected_fiscal = st.sidebar.selectbox(
-                                    "Sélectionner une année fiscale",
-                                    ["Toutes"] + fiscal_years,
-                                    key="sidebar_fiscal_year_mode1"
-                                )
-                                
-                                if selected_fiscal != "Toutes":
-                                    st.session_state.selected_fiscal_year = selected_fiscal
-                                else:
-                                    if 'selected_fiscal_year' in st.session_state:
-                                        del st.session_state.selected_fiscal_year
-                        
-                        else:  # Dates Personnalisées
-                            # Réinitialiser l'année fiscale si elle existe
-                            if 'selected_fiscal_year' in st.session_state:
-                                del st.session_state.selected_fiscal_year
-                            
-                            # Obtenir les limites de dates du contrat
-                            contract_start = df_groupe['DATE DE DÉBUT'].iloc[0]
-                            contract_end = df_groupe['DATE DE FIN'].iloc[0]
-                            
-                            # Si pas de date de fin, utiliser aujourd'hui + 1 an
-                            if pd.isna(contract_end):
-                                contract_end = datetime.now() + timedelta(days=365)
-                            
-                            # Date picker pour début
-                            custom_start = st.sidebar.date_input(
-                                "Date de début",
-                                value=contract_start,
-                                min_value=contract_start,
-                                max_value=contract_end,
-                                key="custom_start_mode1",
-                                format="DD/MM/YYYY",
-                                help=f"Date minimum: {contract_start.strftime('%d/%m/%Y')}"
-                            )
-                            
-                            # Date picker pour fin
-                            custom_end = st.sidebar.date_input(
-                                "Date de fin",
-                                value=contract_end if pd.notna(df_groupe['DATE DE FIN'].iloc[0]) else datetime.now(),
-                                min_value=contract_start,
-                                max_value=contract_end,
-                                key="custom_end_mode1",
-                                format="DD/MM/YYYY",
-                                help=f"Date maximum: {contract_end.strftime('%d/%m/%Y') if pd.notna(df_groupe['DATE DE FIN'].iloc[0]) else 'Pas de limite'}"
-                            )
-                            
-                            # Bouton pour appliquer le filtre personnalisé
-                            if st.sidebar.button("🔍 Appliquer les dates", key="apply_dates_mode1"):
-                                st.session_state.custom_date_start = pd.to_datetime(custom_start)
-                                st.session_state.custom_date_end = pd.to_datetime(custom_end)
-                                st.session_state.use_custom_dates = True
-                                st.rerun()
-                            
-                            # Bouton pour réinitialiser
-                            if 'use_custom_dates' in st.session_state and st.session_state.use_custom_dates:
-                                if st.sidebar.button("🔄 Réinitialiser les dates", key="reset_dates_mode1"):
-                                    if 'custom_date_start' in st.session_state:
-                                        del st.session_state.custom_date_start
-                                    if 'custom_date_end' in st.session_state:
-                                        del st.session_state.custom_date_end
-                                    st.session_state.use_custom_dates = False
-                                    st.rerun()
     
     else:  # Mode Par Groupe
         # Filtre groupe d'abord
@@ -938,92 +931,6 @@ def setup_sidebar():
             if st.sidebar.button("🏢 Voir analyse groupe", use_container_width=True):
                 st.session_state.page = 'groupe'
                 st.rerun()
-            
-            # Filtre année fiscale
-            if 'selected_interlocuteur' in st.session_state:
-                st.sidebar.markdown("---")
-                st.sidebar.markdown("### 📅 Filtre Temporel")
-                
-                df_groupe = df[(df['Groupe'] == selected_groupe) & (df['Interlocuteur'] == st.session_state.selected_interlocuteur)]
-                if not df_groupe.empty:
-                    # Radio button pour choisir le type de filtre
-                    filter_type = st.sidebar.radio(
-                        "Type de filtre:",
-                        ["Année Fiscale", "Dates Personnalisées"],
-                        key="filter_type_mode2"
-                    )
-                    
-                    if filter_type == "Année Fiscale":
-                        # Réinitialiser les dates personnalisées si elles existent
-                        if 'use_custom_dates' in st.session_state:
-                            st.session_state.use_custom_dates = False
-                        
-                        fiscal_years = get_fiscal_years_with_data(df_groupe)
-                        
-                        if fiscal_years:
-                            selected_fiscal = st.sidebar.selectbox(
-                                "Sélectionner une année fiscale",
-                                ["Toutes"] + fiscal_years,
-                                key="sidebar_fiscal_year_mode2"
-                            )
-                            
-                            if selected_fiscal != "Toutes":
-                                st.session_state.selected_fiscal_year = selected_fiscal
-                            else:
-                                if 'selected_fiscal_year' in st.session_state:
-                                    del st.session_state.selected_fiscal_year
-                    
-                    else:  # Dates Personnalisées
-                        # Réinitialiser l'année fiscale si elle existe
-                        if 'selected_fiscal_year' in st.session_state:
-                            del st.session_state.selected_fiscal_year
-                        
-                        # Obtenir les limites de dates du contrat
-                        contract_start = df_groupe['DATE DE DÉBUT'].iloc[0]
-                        contract_end = df_groupe['DATE DE FIN'].iloc[0]
-                        
-                        # Si pas de date de fin, utiliser aujourd'hui + 1 an
-                        if pd.isna(contract_end):
-                            contract_end = datetime.now() + timedelta(days=365)
-                        
-                        # Date picker pour début
-                        custom_start = st.sidebar.date_input(
-                            "Date de début",
-                            value=contract_start,
-                            min_value=contract_start,
-                            max_value=contract_end,
-                            key="custom_start_mode2",
-                            format="DD/MM/YYYY",
-                            help=f"Date minimum: {contract_start.strftime('%d/%m/%Y')}"
-                        )
-                        
-                        # Date picker pour fin
-                        custom_end = st.sidebar.date_input(
-                            "Date de fin",
-                            value=contract_end if pd.notna(df_groupe['DATE DE FIN'].iloc[0]) else datetime.now(),
-                            min_value=contract_start,
-                            max_value=contract_end,
-                            key="custom_end_mode2",
-                            format="DD/MM/YYYY",
-                            help=f"Date maximum: {contract_end.strftime('%d/%m/%Y') if pd.notna(df_groupe['DATE DE FIN'].iloc[0]) else 'Pas de limite'}"
-                        )
-                        
-                        # Bouton pour appliquer le filtre personnalisé
-                        if st.sidebar.button("🔍 Appliquer les dates", key="apply_dates_mode2"):
-                            st.session_state.custom_date_start = pd.to_datetime(custom_start)
-                            st.session_state.custom_date_end = pd.to_datetime(custom_end)
-                            st.session_state.use_custom_dates = True
-                            st.rerun()
-                        
-                        # Bouton pour réinitialiser
-                        if 'use_custom_dates' in st.session_state and st.session_state.use_custom_dates:
-                            if st.sidebar.button("🔄 Réinitialiser les dates", key="reset_dates_mode2"):
-                                if 'custom_date_start' in st.session_state:
-                                    del st.session_state.custom_date_start
-                                if 'custom_date_end' in st.session_state:
-                                    del st.session_state.custom_date_end
-                                st.session_state.use_custom_dates = False
-                                st.rerun()
 
 def show_import_page():
     """Page d'import des fichiers"""
@@ -1110,12 +1017,34 @@ def show_global_results():
     df = st.session_state['df_merged']
     df_clients = st.session_state['df_clients_raw']
     
+    # Appliquer le filtre global de date
+    df_filtered = apply_global_date_filter(df)
+    
+    # Afficher information sur le filtre appliqué
+    if 'global_date_filter_type' in st.session_state:
+        filter_type = st.session_state.global_date_filter_type
+        if filter_type == "Année Fiscale" and 'global_fiscal_year' in st.session_state:
+            fiscal_year = st.session_state.global_fiscal_year
+            st.markdown(f"""
+            <div class="fiscal-year-info">
+                <strong>📅 Filtre appliqué: Année fiscale {fiscal_year}</strong>
+            </div>
+            """, unsafe_allow_html=True)
+        elif filter_type == "Dates Personnalisées" and 'global_custom_start' in st.session_state:
+            start_date = st.session_state.global_custom_start
+            end_date = st.session_state.global_custom_end
+            st.markdown(f"""
+            <div class="fiscal-year-info">
+                <strong>📅 Filtre appliqué: Période du {start_date.strftime('%d/%m/%Y')} au {end_date.strftime('%d/%m/%Y')}</strong>
+            </div>
+            """, unsafe_allow_html=True)
+    
     # Information sur la logique d'analyse
     st.info("📈 **Logique d'analyse** : Seules les ventes réalisées pendant la période de contrat de chaque groupe sont prises en compte.")
     
     # KPIs globaux
     st.markdown("<h4 style='color: #2E4057;'>📈 KPIs Globaux</h4>", unsafe_allow_html=True)
-    kpis = calculate_kpis(df)
+    kpis = calculate_kpis(df_filtered)
     display_kpis(kpis)
     
     # Alertes pour contrats se terminant bientôt
@@ -1148,7 +1077,7 @@ def show_global_results():
     
     # Table principale
     st.markdown("<h4 style='color: #2E4057;'>📋 Table Principale des Contrats</h4>", unsafe_allow_html=True)
-    main_table = create_main_table(df)
+    main_table = create_main_table(df_filtered)
     
     if not main_table.empty:
         # Mise en forme conditionnelle
@@ -1195,7 +1124,7 @@ def show_global_results():
     
     # Table des produits
     st.markdown("<h4 style='color: #2E4057;'>🛍️ Tous les Produits</h4>", unsafe_allow_html=True)
-    products_table = create_products_table(df)
+    products_table = create_products_table(df_filtered)
     
     if not products_table.empty:
         def style_products_table(df):
@@ -1219,10 +1148,10 @@ def show_global_results():
         st.dataframe(style_products_table(products_table), use_container_width=True, hide_index=True)
     
     # Table des gammes de produits
-    if 'Product Family Desc' in df.columns:
+    if 'Product Family Desc' in df_filtered.columns:
         st.markdown("<h4 style='color: #2E4057;'>📊 Analyse par Gamme de Produits</h4>", unsafe_allow_html=True)
         
-        family_table = create_product_family_table(df)
+        family_table = create_product_family_table(df_filtered)
         
         if not family_table.empty:
             st.dataframe(style_family_table(family_table), use_container_width=True, hide_index=True)
@@ -1244,8 +1173,28 @@ def show_interlocuteur_results():
     else:
         st.markdown(f'<h3 class="main-header">👤 Analyse - {display_name}</h3>', unsafe_allow_html=True)
     
-    # Filtrer les données
+    # Filtrer les données par interlocuteur puis appliquer le filtre global de date
     df_filtered = df[df['Interlocuteur'] == selected_interlocuteur]
+    df_filtered = apply_global_date_filter(df_filtered)
+    
+    # Afficher information sur le filtre appliqué
+    if 'global_date_filter_type' in st.session_state:
+        filter_type = st.session_state.global_date_filter_type
+        if filter_type == "Année Fiscale" and 'global_fiscal_year' in st.session_state:
+            fiscal_year = st.session_state.global_fiscal_year
+            st.markdown(f"""
+            <div class="fiscal-year-info">
+                <strong>📅 Filtre appliqué: Année fiscale {fiscal_year}</strong>
+            </div>
+            """, unsafe_allow_html=True)
+        elif filter_type == "Dates Personnalisées" and 'global_custom_start' in st.session_state:
+            start_date = st.session_state.global_custom_start
+            end_date = st.session_state.global_custom_end
+            st.markdown(f"""
+            <div class="fiscal-year-info">
+                <strong>📅 Filtre appliqué: Période du {start_date.strftime('%d/%m/%Y')} au {end_date.strftime('%d/%m/%Y')}</strong>
+            </div>
+            """, unsafe_allow_html=True)
     
     # KPIs pour cet interlocuteur
     st.markdown("<h4 style='color: #2E4057;'>📈 KPIs de l'Interlocuteur</h4>", unsafe_allow_html=True)
@@ -1372,8 +1321,9 @@ def show_groupe_results():
     else:
         st.markdown(f"**Interlocuteur**: {display_name}")
     
-    # Filtrer les données
+    # Filtrer les données par groupe et interlocuteur puis appliquer le filtre global de date
     df_groupe = df[(df['Groupe'] == selected_groupe) & (df['Interlocuteur'] == selected_interlocuteur)]
+    df_groupe_filtered = apply_global_date_filter(df_groupe)
     
     # Afficher les dates du contrat
     if not df_groupe.empty:
@@ -1393,52 +1343,24 @@ def show_groupe_results():
                 else:
                     st.error(f"📅 **Date de fin du contrat**: {contract_end.strftime('%d/%m/%Y')} (Contrat expiré)")
     
-    # Si des dates personnalisées sont sélectionnées, les utiliser en priorité
-    if 'use_custom_dates' in st.session_state and st.session_state.use_custom_dates:
-        custom_start = st.session_state.custom_date_start
-        custom_end = st.session_state.custom_date_end
-        df_groupe_custom = filter_data_by_custom_dates(df_groupe, custom_start, custom_end)
-        
-        # Afficher l'information sur la période personnalisée
-        if hasattr(df_groupe_custom, 'attrs') and 'actual_start' in df_groupe_custom.attrs:
-            actual_start = df_groupe_custom.attrs['actual_start']
-            actual_end = df_groupe_custom.attrs['actual_end']
-        else:
-            actual_start = custom_start
-            actual_end = custom_end
-            
-        st.markdown(f"""
-        <div class="fiscal-year-info">
-            <strong>📆 Période personnalisée</strong><br>
-            Période analysée : du <strong>{actual_start.strftime('%d/%m/%Y')}</strong> au <strong>{actual_end.strftime('%d/%m/%Y')}</strong>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Utiliser les données filtrées pour la période personnalisée
-        df_groupe = df_groupe_custom
-    
-    # Si une année fiscale est sélectionnée ET pas de dates personnalisées
-    elif 'selected_fiscal_year' in st.session_state:
-        fiscal_year = st.session_state.selected_fiscal_year
-        df_groupe_fiscal = filter_data_by_fiscal_year(df_groupe, fiscal_year)
-        
-        # Afficher l'information sur la période fiscale avec les dates réelles
-        if hasattr(df_groupe_fiscal, 'attrs') and 'actual_start' in df_groupe_fiscal.attrs:
-            actual_start = df_groupe_fiscal.attrs['actual_start']
-            actual_end = df_groupe_fiscal.attrs['actual_end']
-        else:
-            # Fallback aux dates théoriques
-            actual_start, actual_end = get_fiscal_year_bounds(fiscal_year)
-            
-        st.markdown(f"""
-        <div class="fiscal-year-info">
-            <strong>📅 Année fiscale {fiscal_year}</strong><br>
-            Période analysée : du <strong>{actual_start.strftime('%d/%m/%Y')}</strong> au <strong>{actual_end.strftime('%d/%m/%Y')}</strong>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Utiliser les données filtrées pour l'année fiscale
-        df_groupe = df_groupe_fiscal
+    # Afficher information sur le filtre appliqué
+    if 'global_date_filter_type' in st.session_state:
+        filter_type = st.session_state.global_date_filter_type
+        if filter_type == "Année Fiscale" and 'global_fiscal_year' in st.session_state:
+            fiscal_year = st.session_state.global_fiscal_year
+            st.markdown(f"""
+            <div class="fiscal-year-info">
+                <strong>📅 Filtre appliqué: Année fiscale {fiscal_year}</strong>
+            </div>
+            """, unsafe_allow_html=True)
+        elif filter_type == "Dates Personnalisées" and 'global_custom_start' in st.session_state:
+            start_date = st.session_state.global_custom_start
+            end_date = st.session_state.global_custom_end
+            st.markdown(f"""
+            <div class="fiscal-year-info">
+                <strong>📅 Filtre appliqué: Période du {start_date.strftime('%d/%m/%Y')} au {end_date.strftime('%d/%m/%Y')}</strong>
+            </div>
+            """, unsafe_allow_html=True)
     
     # Informations du gestionnaire et dates de renouvellement
     try:
@@ -1480,30 +1402,37 @@ def show_groupe_results():
     except:
         pass
     
-    # KPIs du groupe
+    # KPIs du groupe avec données filtrées
     st.markdown("<h4 style='color: #2E4057;'>📊 KPIs du Groupe</h4>", unsafe_allow_html=True)
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        nb_clients = df_groupe['SoldTo #'].nunique()
+        nb_clients = df_groupe_filtered['SoldTo #'].nunique()
         display_metric_card("Filiales", f"{nb_clients:,}", color="#3182CE")
     with col2:
-        ca_total = df_groupe['Customer Sales'].sum()
+        ca_total = df_groupe_filtered['Customer Sales'].sum()
         display_metric_card("CA réalisé", f"{ca_total:,.2f} €", color="#48BB78")
     with col3:
-        # Calculer l'objectif ajusté en fonction du contexte
+        # Pour l'objectif, utiliser la logique appropriée selon le filtre
         obj_annuel = df_groupe['OBJECTIF ATTENDU'].iloc[0] if not df_groupe.empty else 0
         
-        if 'use_custom_dates' in st.session_state and st.session_state.use_custom_dates:
-            # Pour les dates personnalisées, calculer au prorata de la période sélectionnée
-            custom_start = st.session_state.custom_date_start
-            custom_end = st.session_state.custom_date_end
-            nb_jours_periode = (custom_end - custom_start).days + 1
-            obj = obj_annuel * (nb_jours_periode / 365)
-        elif 'selected_fiscal_year' in st.session_state:
-            # Pour une année fiscale, utiliser l'objectif annuel tel quel
-            obj = obj_annuel
+        if 'global_date_filter_type' in st.session_state:
+            filter_type = st.session_state.global_date_filter_type
+            if filter_type == "Dates Personnalisées":
+                # Pour les dates personnalisées, calculer au prorata de la période sélectionnée
+                custom_start = st.session_state.global_custom_start
+                custom_end = st.session_state.global_custom_end
+                nb_jours_periode = (custom_end - custom_start).days + 1
+                obj = obj_annuel * (nb_jours_periode / 365)
+            elif filter_type == "Année Fiscale":
+                # Pour une année fiscale, utiliser l'objectif annuel tel quel
+                obj = obj_annuel
+            else:
+                # Pour "Toute la période", calculer l'objectif cumulé basé sur les années entamées
+                date_debut = df_groupe['DATE DE DÉBUT'].iloc[0]
+                date_fin = df_groupe['DATE DE FIN'].iloc[0]
+                obj = calculate_adjusted_objective(obj_annuel, date_debut, date_fin)
         else:
-            # Sans filtre, calculer l'objectif cumulé basé sur les années entamées
+            # Fallback
             date_debut = df_groupe['DATE DE DÉBUT'].iloc[0]
             date_fin = df_groupe['DATE DE FIN'].iloc[0]
             obj = calculate_adjusted_objective(obj_annuel, date_debut, date_fin)
@@ -1515,30 +1444,30 @@ def show_groupe_results():
         color = "#10B981" if pct >= 100 else "#EF4444"
         display_metric_card("% Objectif", f"{pct:.2f}%", delta=delta, color=color)
     
-    # Graphique d'évolution mensuelle si année fiscale sélectionnée ou dates personnalisées
-    if (('selected_fiscal_year' in st.session_state) or ('use_custom_dates' in st.session_state and st.session_state.use_custom_dates)) and not df_groupe.empty:
+    # Graphique d'évolution mensuelle si filtre de date appliqué
+    if not df_groupe_filtered.empty and 'global_date_filter_type' in st.session_state and st.session_state.global_date_filter_type != "Toute la période":
         # Créer deux colonnes pour mieux organiser l'espace
         col1, col2 = st.columns([2, 1])
         
         with col1:
             st.markdown("<h4 style='color: #2E4057;'>📊 Évolution Mensuelle du CA</h4>", unsafe_allow_html=True)
             # Adapter le titre selon le filtre actif
-            if 'use_custom_dates' in st.session_state and st.session_state.use_custom_dates:
+            if st.session_state.global_date_filter_type == "Dates Personnalisées":
                 period_title = "Période personnalisée"
             else:
-                period_title = st.session_state.get('selected_fiscal_year', 'Toute la période')
+                period_title = f"Année fiscale {st.session_state.get('global_fiscal_year', 'Toute la période')}"
             
-            monthly_chart = create_monthly_sales_chart(df_groupe, period_title)
+            monthly_chart = create_monthly_sales_chart(df_groupe_filtered, period_title)
             if monthly_chart:
                 st.plotly_chart(monthly_chart, use_container_width=True)
         
         with col2:
             # Ajouter des statistiques mensuelles
-            if not df_groupe.empty:
+            if not df_groupe_filtered.empty:
                 st.markdown("<h4 style='color: #2E4057;'>📈 Statistiques</h4>", unsafe_allow_html=True)
                 
                 # Calculer les stats mensuelles
-                df_stats = df_groupe.copy()
+                df_stats = df_groupe_filtered.copy()
                 df_stats['Month'] = df_stats['Posting Date'].dt.strftime('%b %Y')
                 monthly_ca = df_stats.groupby('Month')['Customer Sales'].sum()
                 
@@ -1547,48 +1476,49 @@ def show_groupe_results():
                 
                 with stat_col1:
                     display_metric_card("CA Moyen/mois", f"{monthly_ca.mean():,.2f} €", color="#805AD5")
-                    display_metric_card("Nb produits uniques", f"{df_groupe['Material Y#'].nunique():,}", color="#38B2AC")
+                    display_metric_card("Nb produits uniques", f"{df_groupe_filtered['Material Y#'].nunique():,}", color="#38B2AC")
                 
                 with stat_col2:
-                    display_metric_card("Nb commandes", f"{df_groupe['Sales Document #'].nunique():,}", color="#F56565")
-                    display_metric_card("Nb lignes", f"{len(df_groupe):,}", color="#4299E1")
+                    display_metric_card("Nb commandes", f"{df_groupe_filtered['Sales Document #'].nunique():,}", color="#F56565")
+                    display_metric_card("Nb lignes", f"{len(df_groupe_filtered):,}", color="#4299E1")
     
-    # Table des filiales
+    # Table des filiales avec données filtrées
     st.markdown("<h4 style='color: #2E4057;'>🏪 Filiales du groupe</h4>", unsafe_allow_html=True)
-    filiales = df_groupe.groupby(['SoldTo #', 'SoldTo Name']).agg({
+    filiales = df_groupe_filtered.groupby(['SoldTo #', 'SoldTo Name']).agg({
         'Sales Document #': 'nunique',
         'Customer Sales': 'sum',
         'SoldTo City': 'first'
     }).reset_index()
     
-    # Convertir SoldTo # en entier
-    filiales['SoldTo #'] = filiales['SoldTo #'].astype(int)
-    
-    filiales['% CA'] = (filiales['Customer Sales'] / filiales['Customer Sales'].sum() * 100).round(2)
-    filiales.columns = ['Filiale', 'Nom de filiale', 'Nb commandes', 'CA', 'Ville','% CA']
-    # Réorganiser les colonnes pour mettre Ville après Nom de filiale
-    filiales = filiales[['Filiale', 'Nom de filiale', 'Ville', 'Nb commandes', 'CA', '% CA']]
-    
-    def style_filiales_table(df):
-        def apply_column_colors(s):
-            colors = {
-                'Filiale': 'background-color: #E8EAF6; color: #283593',
-                'Nom de filiale': 'background-color: #E0F2F1; color: #004D40',
-                'Ville': 'background-color: #F3E5F5; color: #4A148C',  
-                'Nb commandes': 'background-color: #FFF8E1; color: #F57F17',
-                'CA': 'background-color: #E3F2FD; color: #0D47A1',
-                '% CA': 'background-color: #FFEBEE; color: #B71C1C'
-            }
-            return [colors.get(s.name, '') for _ in s]
+    if not filiales.empty:
+        # Convertir SoldTo # en entier
+        filiales['SoldTo #'] = filiales['SoldTo #'].astype(int)
         
-        styled_df = df.style.apply(apply_column_colors)
-        return styled_df.format({
-            'Filiale': '{:d}',
-            'CA': '{:,.2f} €',
-            '% CA': '{:.2f}%'
-        })
-    
-    st.dataframe(style_filiales_table(filiales), use_container_width=True, hide_index=True)
+        filiales['% CA'] = (filiales['Customer Sales'] / filiales['Customer Sales'].sum() * 100).round(2)
+        filiales.columns = ['Filiale', 'Nom de filiale', 'Nb commandes', 'CA', 'Ville','% CA']
+        # Réorganiser les colonnes pour mettre Ville après Nom de filiale
+        filiales = filiales[['Filiale', 'Nom de filiale', 'Ville', 'Nb commandes', 'CA', '% CA']]
+        
+        def style_filiales_table(df):
+            def apply_column_colors(s):
+                colors = {
+                    'Filiale': 'background-color: #E8EAF6; color: #283593',
+                    'Nom de filiale': 'background-color: #E0F2F1; color: #004D40',
+                    'Ville': 'background-color: #F3E5F5; color: #4A148C',  
+                    'Nb commandes': 'background-color: #FFF8E1; color: #F57F17',
+                    'CA': 'background-color: #E3F2FD; color: #0D47A1',
+                    '% CA': 'background-color: #FFEBEE; color: #B71C1C'
+                }
+                return [colors.get(s.name, '') for _ in s]
+            
+            styled_df = df.style.apply(apply_column_colors)
+            return styled_df.format({
+                'Filiale': '{:d}',
+                'CA': '{:,.2f} €',
+                '% CA': '{:.2f}%'
+            })
+        
+        st.dataframe(style_filiales_table(filiales), use_container_width=True, hide_index=True)
     
     # Conditions de contrat
     try:
@@ -1638,9 +1568,9 @@ def show_groupe_results():
     except:
         pass
     
-    # Produits du groupe
+    # Produits du groupe avec données filtrées
     st.markdown("<h4 style='color: #2E4057;'>🛍️ Produits Commandés par ce Groupe</h4>", unsafe_allow_html=True)
-    products_groupe = create_products_table(df_groupe)
+    products_groupe = create_products_table(df_groupe_filtered)
     if not products_groupe.empty:
         def style_products_table(df):
             def apply_column_colors(s):
@@ -1662,11 +1592,11 @@ def show_groupe_results():
         
         st.dataframe(style_products_table(products_groupe), use_container_width=True, hide_index=True)
     
-    # Table des gammes de produits pour le groupe
-    if 'Product Family Desc' in df_groupe.columns:
+    # Table des gammes de produits pour le groupe avec données filtrées
+    if 'Product Family Desc' in df_groupe_filtered.columns:
         st.markdown("<h4 style='color: #2E4057;'>📊 Analyse par Gamme de Produits</h4>", unsafe_allow_html=True)
         
-        family_table = create_product_family_table(df_groupe)
+        family_table = create_product_family_table(df_groupe_filtered)
         
         if not family_table.empty:
             st.dataframe(family_table.style.format({
